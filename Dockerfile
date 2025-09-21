@@ -1,59 +1,80 @@
-# Multi-stage Dockerfile for Paydusa Monorepo
+# Dockerfile.simple - Single container for all services
 FROM node:20-alpine AS base
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install required packages
+RUN apk add --no-cache curl postgresql-client libc6-compat
+RUN npm install -g pnpm pm2
 
-# Set working directory
 WORKDIR /app
 
 # Copy package files
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY turbo.json ./
-
-# Copy apps package.json files
-COPY apps/medusa/package.json ./apps/medusa/
-COPY apps/storefront/package.json ./apps/storefront/
-COPY apps/email/package.json ./apps/email/
+COPY apps/*/package.json ./apps/*/
 COPY packages/*/package.json ./packages/*/
 
 # Install dependencies
-FROM base AS deps
 RUN pnpm install --frozen-lockfile
 
-# Build stage
-FROM base AS builder
+# Copy source code
 COPY . .
-COPY --from=deps /app/node_modules ./node_modules
 
 # Build all applications
 RUN pnpm build
 
-# Production runtime
-FROM node:20-alpine AS runner
-WORKDIR /app
+# Create startup script inline
+RUN cat > start.sh << 'EOF'
+#!/bin/bash
+set -e
 
-# Install pnpm in runtime
-RUN npm install -g pnpm
+echo "🚀 Starting Paydusa Platform..."
 
-# Copy built applications and dependencies
-COPY --from=builder /app/apps ./apps
-COPY --from=builder /app/packages ./packages
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/pnpm-workspace.yaml ./
-COPY --from=builder /app/turbo.json ./
+# Wait for database
+echo "⏳ Waiting for database..."
+until pg_isready -h "${DATABASE_HOST:-postgres}" -p 5432 -U "${POSTGRES_USER:-paydusa_user}"; do
+  sleep 2
+done
 
-# Copy startup scripts
-COPY scripts/ ./scripts/
-RUN chmod +x ./scripts/*.sh
+# Run migrations
+echo "🔄 Running migrations..."
+cd apps/medusa && npx medusa migrations run && cd ../..
+cd apps/storefront && npx payload migrate && cd ../..
 
-# Expose ports
+# Create PM2 ecosystem
+cat > ecosystem.config.js << 'PM2_EOF'
+module.exports = {
+  apps: [
+    {
+      name: 'medusa',
+      cwd: './apps/medusa',
+      script: 'npm',
+      args: 'run start',
+      env: { PORT: 9000 },
+    },
+    {
+      name: 'storefront',
+      cwd: './apps/storefront',
+      script: 'npm',
+      args: 'run start',
+      env: { PORT: 3000 },
+    }
+  ]
+};
+PM2_EOF
+
+# Start with PM2
+echo "🌟 Starting applications..."
+exec pm2-runtime start ecosystem.config.js
+EOF
+
+RUN chmod +x start.sh
+
+# Create uploads directories
+RUN mkdir -p uploads
+
 EXPOSE 3000 9000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:3000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:3000/api/health || curl -f http://localhost:9000/health || exit 1
 
-# Start command
-CMD ["./scripts/start.sh"]
+CMD ["./start.sh"]

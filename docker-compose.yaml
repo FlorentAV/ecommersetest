@@ -11,7 +11,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-strongpass123}
       - POSTGRES_DB=${POSTGRES_DB:-paydusa_db}
     ports:
-      - "5433:5432"  # Changed external port to 5433
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -28,7 +28,7 @@ services:
     container_name: paydusa_redis
     restart: unless-stopped
     ports:
-      - "6380:6379"  # Changed external port to 6380
+      - "6380:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -40,12 +40,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # Medusa Backend API
-  medusa:
+  # Paydusa Application (All-in-One)
+  app:
     build:
       context: .
-      dockerfile: Dockerfile.medusa
-    container_name: paydusa_medusa
+      dockerfile: Dockerfile.simple
+    container_name: paydusa_app
     restart: unless-stopped
     environment:
       - NODE_ENV=production
@@ -53,147 +53,29 @@ services:
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-here}
       - COOKIE_SECRET=${COOKIE_SECRET:-your-super-secret-cookie-key-here}
-      - MEDUSA_ADMIN_CORS=${MEDUSA_ADMIN_CORS:-http://localhost:3000,https://yourdomain.com}
-      - MEDUSA_STORE_CORS=${MEDUSA_STORE_CORS:-http://localhost:3000,https://yourdomain.com}
-      - MEDUSA_BACKEND_URL=${MEDUSA_BACKEND_URL:-http://localhost:9000}
-    ports:
-      - "9001:9000"  # Changed external port to 9001
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - paydusa_network
-    volumes:
-      - medusa_uploads:/app/uploads
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Next.js Storefront with PayloadCMS
-  storefront:
-    build:
-      context: .
-      dockerfile: Dockerfile.storefront
-    container_name: paydusa_storefront
-    restart: unless-stopped
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-paydusa_user}:${POSTGRES_PASSWORD:-strongpass123}@postgres:5432/${POSTGRES_DB:-paydusa_db}
-      - MEDUSA_BACKEND_URL=http://medusa:9000
-      - NEXT_PUBLIC_MEDUSA_BACKEND_URL=${NEXT_PUBLIC_MEDUSA_BACKEND_URL:-http://localhost:9000}
-      - NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY=${NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:-}
-      - MEDUSA_PUBLISHABLE_KEY=${MEDUSA_PUBLISHABLE_KEY:-}
       - PAYLOAD_SECRET=${PAYLOAD_SECRET:-your-super-secret-payload-key-here}
-      - PAYLOAD_PUBLIC_SERVER_URL=${PAYLOAD_PUBLIC_SERVER_URL:-http://localhost:3000}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-your-nextauth-secret-here}
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - MEDUSA_BACKEND_URL=http://localhost:9000
+      - NEXT_PUBLIC_MEDUSA_BACKEND_URL=${NEXT_PUBLIC_MEDUSA_BACKEND_URL:-http://localhost:9001}
+      - NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY=${NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY:-}
     ports:
-      - "3001:3000"  # Changed external port to 3001
+      - "3001:3000"  # Storefront
+      - "9001:9000"  # Medusa API
     depends_on:
       postgres:
         condition: service_healthy
-      medusa:
-        condition: service_healthy
-    networks:
-      - paydusa_network
-    volumes:
-      - storefront_uploads:/app/uploads
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Email Service (Optional)
-  email:
-    build:
-      context: .
-      dockerfile: Dockerfile.email
-    container_name: paydusa_email
-    restart: unless-stopped
-    environment:
-      - NODE_ENV=production
-      - PORT=3001
-    ports:
-      - "3002:3001"  # Changed external port to 3002
-    networks:
-      - paydusa_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Redis Insight (Development/Monitoring)
-  redis-insight:
-    image: redislabs/redisinsight:latest
-    container_name: paydusa_redis_ui
-    restart: unless-stopped
-    ports:
-      - "8002:8001"  # Changed external port to 8002
-    depends_on:
       redis:
         condition: service_healthy
     networks:
       - paydusa_network
-    profiles:
-      - monitoring
-
-  # Database Visualization (Development/Monitoring)
-  db-viz:
-    image: ghcr.io/drizzle-team/gateway:latest
-    container_name: paydusa_db_viz
-    restart: unless-stopped
-    ports:
-      - "4984:4983"  # Changed external port to 4984
-    environment:
-      - PORT=4983
-      - STORE_PATH=/app
-      - MASTERPASS=${DB_VIZ_PASSWORD:-admin123}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-paydusa_user}:${POSTGRES_PASSWORD:-strongpass123}@postgres:5432/${POSTGRES_DB:-paydusa_db}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - paydusa_network
     volumes:
-      - db_viz_data:/app
-    profiles:
-      - monitoring
-
-  # Nginx Reverse Proxy (Optional)
-  nginx:
-    image: nginx:alpine
-    container_name: paydusa_nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/ssl/certs:ro
-    depends_on:
-      - storefront
-      - medusa
-    networks:
-      - paydusa_network
-    profiles:
-      - proxy
+      - app_uploads:/app/uploads
 
 volumes:
   postgres_data:
     driver: local
   redis_data:
     driver: local
-  medusa_uploads:
-    driver: local
-  storefront_uploads:
-    driver: local
-  db_viz_data:
+  app_uploads:
     driver: local
 
 networks:
