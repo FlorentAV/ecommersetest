@@ -21,51 +21,8 @@ COPY . .
 # Build all applications
 RUN pnpm build
 
-# Create startup script inline
-RUN cat > start.sh << 'EOF'
-#!/bin/bash
-set -e
-
-echo "🚀 Starting Paydusa Platform..."
-
-# Wait for database
-echo "⏳ Waiting for database..."
-until pg_isready -h "${DATABASE_HOST:-postgres}" -p 5432 -U "${POSTGRES_USER:-paydusa_user}"; do
-  sleep 2
-done
-
-# Run migrations
-echo "🔄 Running migrations..."
-cd apps/medusa && npx medusa migrations run && cd ../..
-cd apps/storefront && npx payload migrate && cd ../..
-
-# Create PM2 ecosystem
-cat > ecosystem.config.js << 'PM2_EOF'
-module.exports = {
-  apps: [
-    {
-      name: 'medusa',
-      cwd: './apps/medusa',
-      script: 'npm',
-      args: 'run start',
-      env: { PORT: 9000 },
-    },
-    {
-      name: 'storefront',
-      cwd: './apps/storefront',
-      script: 'npm',
-      args: 'run start',
-      env: { PORT: 3000 },
-    }
-  ]
-};
-PM2_EOF
-
-# Start with PM2
-echo "🌟 Starting applications..."
-exec pm2-runtime start ecosystem.config.js
-EOF
-
+# Copy startup script
+COPY start.sh ./start.sh
 RUN chmod +x start.sh
 
 # Create uploads directories
