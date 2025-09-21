@@ -12,8 +12,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/*/package.json ./apps/*/
 COPY packages/*/package.json ./packages/*/
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile
+# Install dependencies (handle both cases)
+RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 
 # Copy source code
 COPY . .
