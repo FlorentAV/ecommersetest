@@ -1,0 +1,59 @@
+# Dockerfile.storefront - Next.js Storefront with PayloadCMS
+FROM node:20-alpine AS base
+
+# Install pnpm and curl for health checks
+RUN npm install -g pnpm && apk add --no-cache curl libc6-compat
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/storefront/package.json ./apps/storefront/
+COPY packages/*/package.json ./packages/*/
+
+# Install dependencies
+FROM base AS deps
+RUN pnpm install --frozen-lockfile
+
+# Build stage
+FROM base AS builder
+COPY . .
+COPY --from=deps /app/node_modules ./node_modules
+
+# Build storefront
+RUN pnpm --filter=storefront build
+
+# Production stage
+FROM node:20-alpine AS runner
+RUN npm install -g pnpm && apk add --no-cache curl postgresql-client
+
+WORKDIR /app
+
+# Copy built Next.js application
+COPY --from=builder /app/apps/storefront/.next/standalone ./
+COPY --from=builder /app/apps/storefront/.next/static ./.next/static
+COPY --from=builder /app/apps/storefront/public ./public
+COPY --from=builder /app/apps/storefront/package.json ./package.json
+
+# Copy PayloadCMS assets
+COPY --from=builder /app/apps/storefront/build ./build
+
+# Copy startup scripts
+COPY scripts/storefront-start.sh ./start.sh
+RUN chmod +x ./start.sh
+
+# Create uploads directory
+RUN mkdir -p uploads
+
+# Set user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+USER nextjs
+
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:3000/api/health || exit 1
+
+CMD ["./start.sh"]

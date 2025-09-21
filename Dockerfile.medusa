@@ -1,0 +1,51 @@
+# Dockerfile.medusa - Medusa Backend Service
+FROM node:20-alpine AS base
+
+# Install pnpm and curl for health checks
+RUN npm install -g pnpm && apk add --no-cache curl
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/medusa/package.json ./apps/medusa/
+COPY packages/*/package.json ./packages/*/
+
+# Install dependencies
+FROM base AS deps
+RUN pnpm install --frozen-lockfile
+
+# Build stage
+FROM base AS builder
+COPY . .
+COPY --from=deps /app/node_modules ./node_modules
+
+# Build Medusa
+RUN pnpm --filter=medusa build
+
+# Production stage
+FROM node:20-alpine AS runner
+RUN npm install -g pnpm && apk add --no-cache curl postgresql-client
+
+WORKDIR /app
+
+# Copy built application
+COPY --from=builder /app/apps/medusa/dist ./dist
+COPY --from=builder /app/apps/medusa/package.json ./package.json
+COPY --from=builder /app/apps/medusa/medusa-config.js ./
+COPY --from=builder /app/node_modules ./node_modules
+
+# Copy migration and startup scripts
+COPY scripts/medusa-start.sh ./start.sh
+RUN chmod +x ./start.sh
+
+# Create uploads directory
+RUN mkdir -p uploads
+
+EXPOSE 9000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:9000/health || exit 1
+
+CMD ["./start.sh"]
